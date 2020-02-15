@@ -1,0 +1,16 @@
+{
+  "name": "jasp",
+  "version": "1.0.0",
+  "description": "",
+  "main": "jasp.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "check-arg-types": "1.1.2",
+    "wasmuth": "1.13.2"
+  }
+}
