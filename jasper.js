@@ -2,10 +2,12 @@ const check = require('check-arg-types')
 const wasmuth = require('wasmuth')
 const type = check.prototype.toType
 
-console.log(wasmuth)
-
-const tokenize = str =>
-  str.replace(/\(/g, ' ( ').replace(/\)/g, ' ) ').split(' ').filter(x => !!x)
+const tokenize = str => str
+  .replace(/(?:\r\n|\r|\n|\t)/g, ' ')
+  .replace(/\(/g, ' ( ')
+  .replace(/\)/g, ' ) ')
+  .split(' ')
+  .filter(x => !!x)
 
 const atom = token =>
   isNaN(Number(token)) ? String(token) : Number(token)
@@ -45,6 +47,12 @@ let ENV = {
   '<=': (x, y) => x <= y,
   '=': (x, y) => x = y,
   not: x => !x,
+  cons: (a, b) => fn => fn(b == null ? b : a, b || a),
+  car: pair => pair((a, b) => a),
+  cdr: pair => pair((a, b) => b),
+  tuple: (...items) => fn => fn(...items),
+  head: ls => ls((head, ...rest) => head),
+  tail: ls => ls((head, ...rest) => rest),
 }
 
 const run = (exp, env = ENV) => {
@@ -69,8 +77,26 @@ const run = (exp, env = ENV) => {
 
 // -- 
 
-const program = '(begin (def r 10) (* pi (* r r)))'
+// const program = '(begin (def r 10) (* pi (* r r)))'
+const program = `
+(begin
+	(def r 10)
+	(* pi (* r r)))
+`
+
+const prog = `
+(begin
+  (def x (cons 1 2))
+  (+ (car x) (cdr x)))
+`
+
+const tuple_prog = `
+(begin
+  (def x (tuple 1 2 3))
+  (tail x))
+`
 
 console.log(
-  run(parse(program))
+  run(parse(tuple_prog))
 )
+
