@@ -1,102 +1,150 @@
-const check = require('check-arg-types')
-const wasmuth = require('wasmuth')
-const type = check.prototype.toType
+import { readLines } from "https://deno.land/std@0.90.0/io/mod.ts";
+import check from "https://unpkg.com/check-arg-types@1.1.2/dist/check-arg-types.m.js";
 
-const tokenize = str => str
-  .replace(/(?:\r\n|\r|\n|\t)/g, ' ')
-  .replace(/\(/g, ' ( ')
-  .replace(/\)/g, ' ) ')
-  .split(' ')
-  .filter(x => !!x)
+const type = check.prototype.toType;
 
-const atom = token =>
-  isNaN(Number(token)) ? String(token) : Number(token)
+let _;
+try {
+  _ = window;
+} catch {
+  _ = global;
+}
 
-const readFromTokens = tokens => {
-  if (!tokens || !tokens.length) throw new Error('unexpected EOF')
-  let token = tokens.shift()
-  if (token === ')') {
-    throw new Error('unexpected )')
-  } else if (token === '(') {
-    let L = []
-    while (tokens[0] !== ')') {
-      L.push(readFromTokens(tokens))
+// -- Internal
+
+function Exp(token) {
+  this.value = token;
+  this.args = [];
+}
+
+Exp.prototype.push = function (arg) {
+  this.args.push(arg);
+};
+
+Exp.prototype.toArray = function () {
+  let arr = [];
+  arr.push(this.value);
+  arr = arr.concat(this.args.map((a) => a instanceof Exp ? a.toArray() : a));
+  return arr;
+};
+
+const tokenize = (str) =>
+  str
+    .replace(/--(.)+/g, " ")
+    .replace(/(?:\r\n|\r|\n|\t)/g, " ")
+    .replace(/\(/g, " ( ")
+    .replace(/\)/g, " ) ")
+    .split(" ")
+    .filter((x) => !!x);
+
+const atom = (
+  token,
+) => (isNaN(Number(token.value)) ? String(token.value) : Number(token.value));
+
+const parse = (tokens) => {
+  const iterator = tokens[Symbol.iterator]();
+  let token = iterator.next();
+  let pos = 0;
+  let open = -1;
+
+  let rootNode = new Exp("root-node");
+  let prevNode;
+  let lastNode;
+
+  while (!token.done && token.value !== " ") {
+    if (token.value === "(") {
+      if (open >= 0) {
+        token = iterator.next();
+        prevNode = lastNode;
+        lastNode = new Exp(atom(token));
+        prevNode.push(lastNode);
+      }
+      open++;
+    } else if (token.value === ")") {
+      open--;
+      lastNode = prevNode;
+      prevNode = null;
+    } else {
+      if (lastNode == null) {
+        lastNode = new Exp(atom(token));
+        rootNode.push(lastNode);
+      } else {
+        lastNode.push(atom(token));
+      }
     }
-    tokens.shift()
-    return L
-  } else {
-    return atom(token)
+
+    pos++;
+    token = iterator.next();
   }
-}
 
-const parse = program => readFromTokens(tokenize(program))
+  // console.log("\n", rootNode.toArray());
+  return rootNode;
+};
 
+// Protected scopes from JavaScript.
+const ns = ["Math"];
+
+// Global function scope that can be written to.
 let ENV = {
-  ...wasmuth,
-  begin: (...args) => args[args.length - 1],
-  array: (...args) => [...args],
-  set: (...args) => new Set([...args]),
-  pi: Math.PI,
-  '+': (x, y) => x + y,
-  '-': (x, y) => x - y,
-  '*': (x, y) => x * y,
-  '/': (x, y) => x / y,
-  '>': (x, y) => x < y,
-  '>': (x, y) => x > y,
-  '>=': (x, y) => x >= y,
-  '<=': (x, y) => x <= y,
-  '=': (x, y) => x = y,
-  not: x => !x,
-  cons: (a, b) => fn => fn(b == null ? b : a, b || a),
-  car: pair => pair((a, b) => a),
-  cdr: pair => pair((a, b) => b),
-  tuple: (...items) => fn => fn(...items),
-  head: ls => ls((head, ...rest) => head),
-  tail: ls => ls((head, ...rest) => rest),
-}
+  "root-node": (...args) => args[args.length - 1],
+  "+": (x, y) => x + y,
+  "-": (x, y) => x - y,
+  "*": (x, y) => x * y,
+  "/": (x, y) => x / y,
+  "<": (x, y) => x < y,
+  ">": (x, y) => x > y,
+  "<=": (x, y) => x <= y,
+  ">=": (x, y) => x >= y,
+  "=": (x, y) => x === y,
+  "!=": (x, y) => x !== y,
+  not: (x) => !x,
+  cons: (a, b) => (fn) => fn(b == null ? b : a, b || a),
+  car: (pair) => pair((a, b) => a),
+  cdr: (pair) => pair((a, b) => b),
+  list: (...items) => (fn) => fn(...items),
+  head: (ls) => ls((head, ...rest) => head),
+  tail: (ls) => ls((head, ...rest) => rest),
+};
 
+// Run the epxressions, handling any language/syntax features.
 const run = (exp, env = ENV) => {
-  if (type(exp) === 'string') {
-    return env[exp]
-  } else if (type(exp) === 'number') {
-    return exp
-  } else if (exp[0] === 'if') {
-    let [, predicate, result, alt] = exp
-    let x = run(predicate, env) ? result : alt
-    return run(x, env)
-  } else if (exp[0] === 'def') {
-    let [, symbol, x] = exp
-    ENV[symbol] = run(x, env)
+  if (type(exp) === "string") {
+    if (exp.indexOf(".") > -1) {
+      const [scope, ref] = exp.split(".");
+      return _[scope][ref];
+    }
+    return env[exp];
+  } else if (type(exp) === "number") {
+    return exp;
+  } else if (exp instanceof Exp) {
+    if (exp.value === "if") {
+      let [, predicate, result, alt] = exp;
+      let x = run(predicate, env) ? result : alt;
+      return run(x, env);
+    } else if (exp.value === "def") {
+      let [symbol, x] = exp.args;
+      ENV[symbol] = run(x, env);
+    } else if (exp.value === "print") {
+      const results = exp.args.map((a) => run(a, env));
+      console.log.apply(console, results);
+    } else {
+      let proc = run(exp.value, env);
+      let args = exp.args.map((arg) => run(arg, env));
+      return proc.apply(null, args);
+    }
   } else {
-    let [head, ...tail] = exp
-    let proc = run(head, env)
-    let args = tail.map(arg => run(arg, env))
-    return proc.apply(null, args)
+    return exp;
   }
+};
+
+const invoke = (program) => run(parse(tokenize(program)));
+
+// -- User land
+
+let program = '';
+for await (let line of readLines(Deno.stdin)) {
+  program = program + line + '\n';
 }
 
-// -- 
-
-// const program = '(begin (def r 10) (* pi (* r r)))'
-const program = `
-(begin
-	(def r 10)
-	(* pi (* r r)))
-`
-
-const prog = `
-(begin
-  (def x (cons 1 2))
-  (+ (car x) (cdr x)))
-`
-
-const tuple_prog = `
-(begin
-  (def x (tuple 1 2 3))
-  (tail x))
-`
-
-console.log(
-  run(parse(tuple_prog))
-)
+console.log(invoke(program));
 
