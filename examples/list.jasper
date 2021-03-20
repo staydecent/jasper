@@ -1,0 +1,2 @@
+(def x (list 1 2 3))
+(tail x))

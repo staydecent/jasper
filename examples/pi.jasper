@@ -1,0 +1,2 @@
+	(def r 10)
+	(* Math.PI (* r r)))
