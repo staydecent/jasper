@@ -1,0 +1,3 @@
+(def resp (fetch `https://api.github.com/users/denoland))
+(def json (resp.json))
+(print json)

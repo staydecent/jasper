@@ -2,13 +2,13 @@ import { readLines } from "https://deno.land/std@0.90.0/io/mod.ts";
 import check from "https://unpkg.com/check-arg-types@1.1.2/dist/check-arg-types.m.js";
 
 const type = check.prototype.toType;
-
 let _;
 try {
   _ = window;
 } catch {
   _ = global;
 }
+
 
 // -- Internal
 
@@ -77,7 +77,11 @@ const parse = (tokens) => {
     token = iterator.next();
   }
 
-  // console.log("\n", rootNode.toArray());
+  if (open !== -1) {
+    throw new Error("You forgot to close an expression!");
+  }
+
+  // console.log("\n", rootNode.toArray(), "\n", { pos, open });
   return rootNode;
 };
 
@@ -104,40 +108,58 @@ let ENV = {
   list: (...items) => (fn) => fn(...items),
   head: (ls) => ls((head, ...rest) => head),
   tail: (ls) => ls((head, ...rest) => rest),
+  fetch,
 };
 
 // Run the epxressions, handling any language/syntax features.
-const run = (exp, env = ENV) => {
+const run = (exp, env = ENV) => new Promise(async (resolve, reject) => {
   if (type(exp) === "string") {
-    if (exp.indexOf(".") > -1) {
+    console.log('STRING', exp);
+    if (exp[0] === "`") {
+      resolve(exp.slice(1));
+    } else if (exp.indexOf(".") > -1) {
       const [scope, ref] = exp.split(".");
-      return _[scope][ref];
+      console.log('!!!!');
+      if (scope in env) {
+        console.log('var method!', scope, ref, env);
+        resolve(env[scope]);
+      } else {
+        console.log('var method!', scope, ref, env);
+        resolve(_[scope][ref]);
+      }
+    } else {
+      console.log('ATOM', exp);
+      resolve(env[exp]);
     }
-    return env[exp];
   } else if (type(exp) === "number") {
-    return exp;
+    resolve(exp);
   } else if (exp instanceof Exp) {
     if (exp.value === "if") {
       let [, predicate, result, alt] = exp;
-      let x = run(predicate, env) ? result : alt;
-      return run(x, env);
+      let x = await run(predicate, env) ? result : alt;
+      let ret = await run(x, env);
+      resolve(ret);
     } else if (exp.value === "def") {
       let [symbol, x] = exp.args;
-      ENV[symbol] = run(x, env);
+      ENV[symbol] = await run(x, env);
     } else if (exp.value === "print") {
-      const results = exp.args.map((a) => run(a, env));
+      const promises = exp.args.map((a) => run(a, env));
+      const results = await Promise.all(promises);
       console.log.apply(console, results);
+    } else if (exp.value.indexOf(".") > -1) {
+      console.log("REF METHOD", exp, env);
     } else {
-      let proc = run(exp.value, env);
-      let args = exp.args.map((arg) => run(arg, env));
-      return proc.apply(null, args);
+      let proc = await run(exp.value, env);
+      let argsPromises = exp.args.map((arg) => run(arg, env));
+      let args = await Promise.all(argsPromises);
+      let ret = await proc.apply(null, args);
+      console.log('PROC', exp, ret);
+      resolve(ret);
     }
   } else {
-    return exp;
+    resolve(exp);
   }
-};
-
-const invoke = (program) => run(parse(tokenize(program)));
+});
 
 // -- User land
 
@@ -146,5 +168,6 @@ for await (let line of readLines(Deno.stdin)) {
   program = program + line + '\n';
 }
 
-console.log(invoke(program));
+const result = await run(parse(tokenize(program)));
 
+console.log(result);
