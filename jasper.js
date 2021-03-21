@@ -1,6 +1,8 @@
 import { readLines } from "https://deno.land/std@0.90.0/io/mod.ts";
 import check from "https://unpkg.com/check-arg-types@1.1.2/dist/check-arg-types.m.js";
 
+// -- Util
+
 const type = check.prototype.toType;
 let _;
 try {
@@ -9,8 +11,59 @@ try {
   _ = global;
 }
 
+const atom = token =>
+  isNaN(Number(token.value)) ? String(token.value) : Number(token.value);
+
+const evalOrAtom = token => new Promise((resolve) => {
+  if (token instanceof Exp) {
+    token.evaluate().then(result => resolve(result));
+  } else {
+    resolve(atom(token));
+  }
+});
+
+const serial = (tasks) => new Promise((resolve, reject) => {
+  const results = [];
+  const getResult = (prev, task) => prev
+    .then(task)
+    .then(result => {
+      results.push(result)
+      return result
+    })
+    .catch(err => console.error(err));
+
+  tasks
+    .reduce(getResult, Promise.resolve())
+    .then(() => resolve(results))
+    .catch(err => console.error(err));
+});
 
 // -- Internal
+
+// Protected scopes from JavaScript.
+const ns = ["Math"];
+
+// Global function scope that can be written to.
+let ENV = {
+  "+": (x, y) => x + y,
+  "-": (x, y) => x - y,
+  "*": (x, y) => x * y,
+  "/": (x, y) => x / y,
+  "<": (x, y) => x < y,
+  ">": (x, y) => x > y,
+  "<=": (x, y) => x <= y,
+  ">=": (x, y) => x >= y,
+  "=": (x, y) => x === y,
+  "!=": (x, y) => x !== y,
+  not: (x) => !x,
+  cons: (a, b) => (fn) => fn(b == null ? b : a, b || a),
+  car: (pair) => pair((a, b) => a),
+  cdr: (pair) => pair((a, b) => b),
+  list: (...items) => (fn) => fn(...items),
+  head: (ls) => ls((head, ...rest) => head),
+  tail: (ls) => ls((head, ...rest) => rest),
+  fetch,
+};
 
 function Exp(token) {
   this.value = token;
@@ -19,6 +72,37 @@ function Exp(token) {
 
 Exp.prototype.push = function (arg) {
   this.args.push(arg);
+};
+
+Exp.prototype.evaluate = function() {
+  return new Promise((resolve) => {
+    if (this.value === "root-node") {
+      const results = this.args.map(a => evalOrAtom(a));
+      serial(this.args.map(evalOrAtom)).then(result => resolve(result));
+    } else if (this.value === "def") {
+      const [symbol, token] = this.args;
+      console.log("DEFINE1:", symbol, token);
+      evalOrAtom(token).then(result => {
+        ENV[symbol] = result;
+        console.log("DEFINE2:", symbol, token, result, ENV);
+        resolve(result);
+      });
+    } else if (this.value === "print") {
+      serial(this.args.map(evalOrAtom)).then(result => {
+        console.log.apply(console, result);
+        resolve(result);
+      });
+    } else if (this.value in ENV) {
+      console.log("PROC1:", this);
+      console.log('PROC2:', ENV[this.value], this.args);
+      const syncResult = ENV[this.value].apply(ENV[this.value], this.args);
+      if (typeof syncResult.then === "function") {
+        syncResult.then(result => resolve(result));
+      } else {
+        resolve(syncResult);
+      }
+    }
+  });
 };
 
 Exp.prototype.toArray = function () {
@@ -36,10 +120,6 @@ const tokenize = (str) =>
     .replace(/\)/g, " ) ")
     .split(" ")
     .filter((x) => !!x);
-
-const atom = (
-  token,
-) => (isNaN(Number(token.value)) ? String(token.value) : Number(token.value));
 
 const parse = (tokens) => {
   const iterator = tokens[Symbol.iterator]();
@@ -85,81 +165,10 @@ const parse = (tokens) => {
   return rootNode;
 };
 
-// Protected scopes from JavaScript.
-const ns = ["Math"];
-
-// Global function scope that can be written to.
-let ENV = {
-  "root-node": (...args) => args[args.length - 1],
-  "+": (x, y) => x + y,
-  "-": (x, y) => x - y,
-  "*": (x, y) => x * y,
-  "/": (x, y) => x / y,
-  "<": (x, y) => x < y,
-  ">": (x, y) => x > y,
-  "<=": (x, y) => x <= y,
-  ">=": (x, y) => x >= y,
-  "=": (x, y) => x === y,
-  "!=": (x, y) => x !== y,
-  not: (x) => !x,
-  cons: (a, b) => (fn) => fn(b == null ? b : a, b || a),
-  car: (pair) => pair((a, b) => a),
-  cdr: (pair) => pair((a, b) => b),
-  list: (...items) => (fn) => fn(...items),
-  head: (ls) => ls((head, ...rest) => head),
-  tail: (ls) => ls((head, ...rest) => rest),
-  fetch,
+function run(exp) {
+  // root-node
+  exp.evaluate().then(result => console.log('END:', result));
 };
-
-// Run the epxressions, handling any language/syntax features.
-const run = (exp, env = ENV) => new Promise(async (resolve, reject) => {
-  if (type(exp) === "string") {
-    console.log('STRING', exp);
-    if (exp[0] === "`") {
-      resolve(exp.slice(1));
-    } else if (exp.indexOf(".") > -1) {
-      const [scope, ref] = exp.split(".");
-      console.log('!!!!');
-      if (scope in env) {
-        console.log('var method!', scope, ref, env);
-        resolve(env[scope]);
-      } else {
-        console.log('var method!', scope, ref, env);
-        resolve(_[scope][ref]);
-      }
-    } else {
-      console.log('ATOM', exp);
-      resolve(env[exp]);
-    }
-  } else if (type(exp) === "number") {
-    resolve(exp);
-  } else if (exp instanceof Exp) {
-    if (exp.value === "if") {
-      let [, predicate, result, alt] = exp;
-      let x = await run(predicate, env) ? result : alt;
-      let ret = await run(x, env);
-      resolve(ret);
-    } else if (exp.value === "def") {
-      let [symbol, x] = exp.args;
-      ENV[symbol] = await run(x, env);
-    } else if (exp.value === "print") {
-      const promises = exp.args.map((a) => run(a, env));
-      const results = await Promise.all(promises);
-      console.log.apply(console, results);
-    } else if (exp.value.indexOf(".") > -1) {
-      console.log("REF METHOD", exp, env);
-    } else {
-      let proc = await run(exp.value, env);
-      let argsPromises = exp.args.map((arg) => run(arg, env));
-      let args = await Promise.all(argsPromises);
-      let ret = await proc.apply(null, args);
-      console.log('PROC', exp, ret);
-      resolve(ret);
-    }
-  } else {
-    resolve(exp);
-  }
-});
 
 // -- User land
 
@@ -168,6 +177,4 @@ for await (let line of readLines(Deno.stdin)) {
   program = program + line + '\n';
 }
 
-const result = await run(parse(tokenize(program)));
-
-console.log(result);
+run(parse(tokenize(program)));
